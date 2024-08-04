@@ -19,7 +19,7 @@ hysteria2一键安装
 
 **🙃安装脚本(首先推荐ubuntu的系统):**
 ```
-curl -sSL https://github.com/seagullz4/hysteria2/raw/main/install.sh -o install.sh && chmod +x install.sh && bash install.sh
+curl -sSL https://raw.githubusercontent.com/fjidbajd/hy2/main/install.sh -o install.sh && chmod +x install.sh && bash install.sh
 ```
 
 **支持一波浪的主流架构以及纯ipv4和纯ipv6服务器**
