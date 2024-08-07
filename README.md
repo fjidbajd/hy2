@@ -4,7 +4,7 @@ hysteria2一键安装
 
 
 
-**🙃安装脚本(首先推荐ubuntu的系统):**
+**安装脚本:**
 ```
 wget -P /root -N --no-check-certificate "https://raw.githubusercontent.com/fjidbajd/hy2/main/install.sh" && chmod 700 /root/install.sh && /root/install.sh
 ```
