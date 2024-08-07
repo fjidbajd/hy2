@@ -1,0 +1,295 @@
+#!/bin/bash
+# 检测当前用户是否为 root 用户
+if [ "$EUID" -ne 0 ]; then
+  echo "请使用 root 用户执行此脚本！"
+  echo "你可以使用 'sudo -i' 进入 root 用户模式。"
+  exit 1
+fi
+
+check_sys() {
+  if [[ -f /etc/redhat-release ]]; then
+    release="centos"
+  elif grep -qi "debian" /etc/issue; then
+    release="debian"
+  elif grep -qi "ubuntu" /etc/issue; then
+    release="ubuntu"
+  elif grep -qi -E "centos|red hat|redhat|rocky" /etc/issue || grep -qi -E "centos|red hat|redhat|rocky" /proc/version; then
+    release="centos"
+  fi
+
+  if [[ -f /etc/debian_version ]]; then
+    OS_type="Debian"
+    echo "检测为Debian通用系统，判断有误请反馈"
+  elif [[ -f /etc/redhat-release || -f /etc/centos-release || -f /etc/fedora-release || -f /etc/rocky-release ]]; then
+    OS_type="CentOS"
+    echo "检测为CentOS通用系统，判断有误请反馈"
+  else
+    echo "Unknown"
+  fi
+}
+
+
+_exists() {
+    local cmd="$1"
+    if eval type type >/dev/null 2>&1; then
+      eval type "$cmd" >/dev/null 2>&1
+    elif command >/dev/null 2>&1; then
+      command -v "$cmd" >/dev/null 2>&1
+    else
+      which "$cmd" >/dev/null 2>&1
+    fi
+    local rt=$?
+    return ${rt}
+}
+
+random_color() {
+  colors=("31" "32" "33" "34" "35" "36" "37")
+  echo -e "\e[${colors[$((RANDOM % 7))]}m$1\e[0m"
+}
+
+if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    OS_TYPE=$ID
+    OS_VERSION=$VERSION_ID
+else
+    echo "无法确定操作系统类型。"
+    exit 1
+fi
+
+install_custom_packages() {
+    if [ "$OS_TYPE" = "debian" ] || [ "$OS_TYPE" = "ubuntu" ]; then
+        apt-get update
+        apt-get install -y wget sed openssl net-tools psmisc procps iptables iproute2 ca-certificates jq
+    elif [ "$OS_TYPE" = "centos" ] || [ "$OS_TYPE" = "rhel" ] || [ "$OS_TYPE" = "rocky" ]; then
+        yum install -y epel-release
+        yum install -y wget sed openssl net-tools psmisc procps-ng iptables iproute ca-certificates jq
+    else
+        echo "不支持的操作系统。"
+        exit 1
+    fi
+}
+
+install_custom_packages
+
+echo "已安装的软件包："
+for pkg in wget sed openssl net-tools psmisc procps iptables iproute2 ca-certificates jq; do
+    if command -v $pkg >/dev/null 2>&1; then
+        echo "$pkg 已安装"
+    else
+        echo "$pkg 未安装"
+    fi
+done
+
+echo "所有指定的软件包均已安装完毕。"
+
+set_architecture() {
+  case "$(uname -m)" in
+    'i386' | 'i686')
+      arch='386'
+      ;;
+    'amd64' | 'x86_64')
+      arch='amd64'
+      ;;
+    'armv5tel' | 'armv6l' | 'armv7' | 'armv7l')
+      arch='arm'
+      ;;
+    'armv8' | 'aarch64')
+      arch='arm64'
+      ;;
+    'mips' | 'mipsle' | 'mips64' | 'mips64le')
+      arch='mipsle'
+      ;;
+    's390x')
+      arch='s390x'
+      ;;
+    *)
+      echo "暂时不支持你的系统哦，可能是因为不在已知架构范围内。"
+      exit 1
+      ;;
+  esac
+}
+
+get_installed_version() {
+    if [ -x "/root/hy3/hysteria-linux-$arch" ]; then
+        version="$("/root/hy3/hysteria-linux-$arch" version | grep Version | grep -o 'v[.0-9]*')"
+    else
+        version="你还没有安装,老登"
+    fi
+}
+
+get_latest_version() {
+  local tmpfile
+  tmpfile=$(mktemp)
+
+  if ! curl -sS "https://api.hy2.io/v1/update?cver=installscript&plat=linux&arch="$arch"&chan=release&side=server" -o "$tmpfile"; then
+    error "Failed to get the latest version from Hysteria 2 API, please check your network and try again."
+    exit 11
+  fi
+
+  local latest_version
+  latest_version=$(grep -oP '"lver":\s*\K"v.*?"' "$tmpfile" | head -1)
+  latest_version=${latest_version#'"'}
+  latest_version=${latest_version%'"'}
+
+  if [[ -n "$latest_version" ]]; then
+    echo "$latest_version"
+  fi
+
+  rm -f "$tmpfile"
+}
+
+checkact() {
+pid=$(pgrep -f "hysteria-linux-$arch")
+
+if [ -n "$pid" ]; then
+  hy2zt="运行中"
+else
+  hy2zt="未运行"
+fi
+}
+
+BBR_grub() {
+  if [[ "${OS_type}" == "CentOS" ]]; then
+    if [[ ${version} == "6" ]]; then
+      if [ -f "/boot/grub/grub.conf" ]; then
+        sed -i 's/^default=.*/default=0/g' /boot/grub/grub.conf
+      elif [ -f "/boot/grub/grub.cfg" ]; then
+        grub-mkconfig -o /boot/grub/grub.cfg
+        grub-set-default 0
+      elif [ -f "/boot/efi/EFI/centos/grub.cfg" ]; then
+        grub-mkconfig -o /boot/efi/EFI/centos/grub.cfg
+        grub-set-default 0
+      elif [ -f "/boot/efi/EFI/redhat/grub.cfg" ]; then
+        grub-mkconfig -o /boot/efi/EFI/redhat/grub.cfg
+        grub-set-default 0
+      else
+        echo -e "${Error} grub.conf/grub.cfg 找不到，请检查."
+        exit
+      fi
+    elif [[ ${version} == "7" ]]; then
+      if [ -f "/boot/grub2/grub.cfg" ]; then
+        grub2-mkconfig -o /boot/grub2/grub.cfg
+        grub2-set-default 0
+      elif [ -f "/boot/efi/EFI/centos/grub.cfg" ]; then
+        grub2-mkconfig -o /boot/efi/EFI/centos/grub.cfg
+        grub2-set-default 0
+      elif [ -f "/boot/efi/EFI/redhat/grub.cfg" ]; then
+        grub2-mkconfig -o /boot/efi/EFI/redhat/grub.cfg
+        grub2-set-default 0
+      else
+        echo -e "${Error} grub.cfg 找不到，请检查."
+        exit
+      fi
+    elif [[ ${version} == "8" ]]; then
+      if [ -f "/boot/grub2/grub.cfg" ]; then
+        grub2-mkconfig -o /boot/grub2/grub.cfg
+        grub2-set-default 0
+      elif [ -f "/boot/efi/EFI/centos/grub.cfg" ]; then
+        grub2-mkconfig -o /boot/efi/EFI/centos/grub.cfg
+        grub2-set-default 0
+      elif [ -f "/boot/efi/EFI/redhat/grub.cfg" ]; then
+        grub2-mkconfig -o /boot/efi/EFI/redhat/grub.cfg
+        grub2-set-default 0
+      else
+        echo -e "${Error} grub.cfg 找不到，请检查."
+        exit
+      fi
+      grubby --info=ALL | awk -F= '$1=="kernel" {print i++ " : " $2}'
+    fi
+  elif [[ "${OS_type}" == "Debian" ]]; then
+    if _exists "update-grub"; then
+      update-grub
+    elif [ -f "/usr/sbin/update-grub" ]; then
+      /usr/sbin/update-grub
+    else
+      apt install grub2-common -y
+      update-grub
+    fi
+    #exit 1
+  fi
+}
+check_version() {
+  if [[ -s /etc/redhat-release ]]; then
+    version=$(grep -oE "[0-9.]+" /etc/redhat-release | cut -d . -f 1)
+  else
+    version=$(grep -oE "[0-9.]+" /etc/issue | cut -d . -f 1)
+  fi
+  bit=$(uname -m)
+  check
+  check_sys
+  }
+
+prompt_info() {
+  echo -e "\e[32m[$(date +'%Y-%m-%d %H:%M:%S')] $*\e[0m"
+}
+
+set_bbr() {
+  echo "启用 TCP BBR 拥塞控制算法"
+  echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
+  echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
+  sysctl -p
+}
+
+set_caddy() {
+  wget -O /usr/bin/caddy https://caddyserver.com/api/download\?os\=linux\&arch\=$arch\&p\=personal
+  chmod +x /usr/bin/caddy
+}
+
+generate_hysteria_config() {
+  mkdir -p /root/hy3
+  cat <<EOF > /root/hy3/config.json
+{
+  "listen": ":${port}",
+  "cert": "/root/hy3/server.crt",
+  "key": "/root/hy3/server.key",
+  "up_mbps": 100,
+  "down_mbps": 100,
+  "auth": {
+    "mode": "password",
+    "config": {
+      "password": "${password}"
+    }
+  }
+}
+EOF
+}
+
+generate_self_signed_cert() {
+  openssl req -x509 -newkey rsa:4096 -keyout /root/hy3/server.key -out /root/hy3/server.crt -days 365 -nodes -subj "/CN=example.com"
+}
+
+start_hysteria() {
+  nohup /root/hy3/hysteria-linux-$arch -c /root/hy3/config.json > /root/hy3/hysteria.log 2>&1 &
+}
+
+stop_hysteria() {
+  pkill -f "hysteria-linux-$arch"
+}
+
+main() {
+  prompt_info "检查系统类型和架构"
+  check_sys
+  set_architecture
+
+  prompt_info "安装自定义软件包"
+  install_custom_packages
+
+  prompt_info "设置 BBR"
+  set_bbr
+
+  prompt_info "安装 Caddy"
+  set_caddy
+
+  prompt_info "生成 Hysteria 配置文件"
+  generate_hysteria_config
+
+  prompt_info "生成自签名证书"
+  generate_self_signed_cert
+
+  prompt_info "启动 Hysteria"
+  start_hysteria
+
+  prompt_info "安装和配置完成"
+}
+
+main
